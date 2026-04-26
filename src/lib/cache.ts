@@ -59,6 +59,15 @@ export async function cachedSWR<T>(opts: {
 
   if (existing?.value !== undefined && existing.expiresAt > now) return existing.value;
 
+  // Cold start: if we have no value at all, block once to fill cache (best effort).
+  if (!existing?.value) {
+    try {
+      return await cached(key, ttlMs, fn);
+    } catch {
+      return fallback;
+    }
+  }
+
   // Kick off refresh if not already running.
   if (!existing?.inFlight) {
     const entry: CacheEntry<T> = existing ?? { expiresAt: 0 };

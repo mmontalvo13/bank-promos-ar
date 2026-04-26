@@ -5,6 +5,19 @@ import { scrapeBbvaPromotions } from "@/lib/scrapers/bbva";
 import { scrapeModoPromotions } from "@/lib/scrapers/modo";
 import { cached, cachedSWR } from "@/lib/cache";
 
+function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`timeout after ${ms}ms`)), ms);
+    p.then((v) => {
+      clearTimeout(t);
+      resolve(v);
+    }).catch((e) => {
+      clearTimeout(t);
+      reject(e);
+    });
+  });
+}
+
 export type PromotionsQuery = {
   q?: string;
   day?: string;
@@ -31,9 +44,9 @@ export async function getPromotions(_query?: PromotionsQuery): Promise<Promotion
     // - Use scraped MODO promos when available
     // - Keep mock promos for other banks
     const [galiciaScrape, bbvaScrape, modoScrape] = await Promise.allSettled([
-      cached("scrape:galicia:v2", 30 * 60 * 1000, async () => scrapeGaliciaPromotions()),
-      cached("scrape:bbva:v2", 30 * 60 * 1000, async () => scrapeBbvaPromotions({ maxPages: 8 })),
-      cached("scrape:modo:v2", 30 * 60 * 1000, async () => scrapeModoPromotions({ maxPages: 10, limit: 100 }))
+      cached("scrape:galicia:v2", 30 * 60 * 1000, async () => withTimeout(scrapeGaliciaPromotions(), 12_000)),
+      cached("scrape:bbva:v2", 30 * 60 * 1000, async () => withTimeout(scrapeBbvaPromotions({ maxPages: 8 }), 12_000)),
+      cached("scrape:modo:v2", 30 * 60 * 1000, async () => withTimeout(scrapeModoPromotions({ maxPages: 10, limit: 100 }), 12_000))
     ]);
 
     const g = galiciaScrape.status === "fulfilled" && galiciaScrape.value.ok ? galiciaScrape.value.data : [];

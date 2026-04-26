@@ -186,7 +186,7 @@ export default function HomePage() {
             <div className="text-xs font-semibold text-neutral-600">{grouped.length} resultados</div>
           </div>
 
-          <div className="space-y-3">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3">
             {grouped.map((g) =>
               g.variants.length > 1 ? <PromotionGroupCard key={g.key} group={g} /> : <PromotionCard key={g.variants[0].id} promotion={g.variants[0]} />
             )}

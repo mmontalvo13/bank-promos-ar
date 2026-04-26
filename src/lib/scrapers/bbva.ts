@@ -1,13 +1,17 @@
-import * as cheerio from "cheerio";
 import { PromotionSchema, type Promotion, type PaymentMethod, type DayOfWeek, type CardNetwork } from "@/lib/schemas/promotion";
 
 export type ScrapeResult<T> =
   | { ok: true; data: T; meta: Record<string, unknown> }
   | { ok: false; error: string; meta: Record<string, unknown> };
 
-// NOTE: `https://www.bbva.com.ar/beneficios/beneficios` currently serves a merchant/comercios landing (not consumer promos)
-// and returns 404 for the exact path the user pasted. The public marketing page below contains concrete reintegro examples.
-const DEFAULT_CONSUMER_URL = "https://www.bbva.com.ar/personas/productos/programa-beneficios.html";
+// BBVA "beneficios" are served by a public API used by their benefits SPA.
+// It provides a list endpoint and a detail endpoint by ID.
+const BBVA_API_BASE = "https://go.bbva.com.ar/willgo/fgo/API/v3";
+const BBVA_LIST_ENDPOINT = `${BBVA_API_BASE}/communications`;
+const BBVA_DETAIL_ENDPOINT = `${BBVA_API_BASE}/communication`;
+
+// Human-facing page (SPA). We'll link here with `?id=` so "Ver promo" goes to BBVA website.
+const BBVA_BENEFICIO_PAGE = "https://www.bbva.com.ar/beneficios/beneficio.html";
 
 function normalizeText(s: string) {
   return s.replace(/\s+/g, " ").trim();
@@ -117,80 +121,102 @@ function hashId(s: string) {
 }
 
 /**
- * BBVA scraper (v0):
- * - Fetch a public HTML page with concrete benefit copy
- * - Extract lines mentioning `%` (reintegros/descuentos)
- * - Map into our Promotion schema (best-effort)
+ * BBVA scraper (v1):
+ * - Use BBVA public benefits API (list + detail by id)
+ * - Map each benefit into our Promotion schema (best-effort)
  */
-export async function scrapeBbvaPromotions(opts?: { url?: string }): Promise<ScrapeResult<Promotion[]>> {
-  const url = opts?.url ?? process.env.BBVA_BENEFICIOS_URL ?? DEFAULT_CONSUMER_URL;
+export async function scrapeBbvaPromotions(opts?: { maxPages?: number; pageSize?: number }): Promise<ScrapeResult<Promotion[]>> {
+  const maxPages = Math.min(Math.max(opts?.maxPages ?? 10, 1), 100);
 
   try {
-    const res = await fetch(url, {
-      headers: {
-        "user-agent":
-          "Mozilla/5.0 (compatible; BankPromosAR/0.1; +https://localhost) AppleWebKit/537.36 (KHTML, like Gecko)",
-        accept: "text/html,application/xhtml+xml"
-      },
-      cache: "no-store"
-    });
-
-    if (!res.ok) {
-      return { ok: false, error: `Fetch failed: ${res.status} ${res.statusText}`, meta: { url, status: res.status } };
-    }
-
-    const html = await res.text();
-    if (isMerchantLanding(url, html)) {
-      return {
-        ok: false,
-        error:
-          "This URL looks like a merchant/comercios landing, not consumer promotions. Try BBVA_BENEFICIOS_URL pointing to a public benefits page with reintegro/discount copy.",
-        meta: { url, mode: "merchant_landing_detected" }
-      };
-    }
-
-    const $ = cheerio.load(html);
-
     const promos: Promotion[] = [];
+    const seenIds = new Set<string>();
 
-    $("li.card").each((_, li) => {
-      const root = $(li);
-      const cardTitle = normalizeText(root.find(".card__title").first().text());
-      const desc = normalizeText(root.find(".card__body.rte").first().text());
-      if (!desc || !desc.includes("%")) return;
+    for (let pager = 0; pager < maxPages; pager++) {
+      // BBVA pagination uses `pager` (0-based). Other params appear to be ignored.
+      const listUrl = `${BBVA_LIST_ENDPOINT}?pager=${pager}`;
+      const listRes = await fetch(listUrl, {
+        headers: { "user-agent": "Mozilla/5.0", accept: "application/json" },
+        cache: "no-store"
+      });
+      if (!listRes.ok) {
+        return { ok: false, error: `Fetch failed: ${listRes.status} ${listRes.statusText}`, meta: { listUrl, status: listRes.status } };
+      }
 
-      const pct = extractPercent(desc);
-      if (!pct) return;
+      const listJson = (await listRes.json()) as any;
+      const items: any[] = Array.isArray(listJson?.data) ? listJson.data : [];
+      if (items.length === 0) break;
+      const newIdsThisPage = items
+        .map((x) => String(x?.id ?? ""))
+        .filter((id) => id && !seenIds.has(id));
+      // Some deployments appear to ignore pagination params and always return the first page.
+      // If we see no new ids, stop early to avoid needless requests.
+      if (pager > 0 && newIdsThisPage.length === 0) break;
 
-      const store = extractStoreFromDescription(desc, cardTitle);
-      const title = normalizeText(desc);
+      for (const it of items) {
+        const id = String(it?.id ?? "");
+        if (!id || seenIds.has(id)) continue;
+        seenIds.add(id);
 
-      const promo: Promotion = {
-        id: `bbva-scrape-${hashId(`${cardTitle}|${desc}`)}`,
-        title,
-        bank: "BBVA",
-        issuerBanks: null,
-        imageUrl: null,
-        category: mapBbvaCategory(desc),
-        store,
-        cardNetworks: guessCardNetworks(desc),
-        days: guessDays(desc),
-        paymentMethods: guessPaymentMethods(desc),
-        discountPercent: pct,
-        capArs: null,
-        eligibility: null,
-        notes: null,
-        validFrom: null,
-        validTo: null,
-        source: { type: "scraper_placeholder", url }
-      };
+        const detailUrl = `${BBVA_DETAIL_ENDPOINT}/${encodeURIComponent(id)}`;
+        const detailRes = await fetch(detailUrl, {
+          headers: { "user-agent": "Mozilla/5.0", accept: "application/json" },
+          cache: "no-store"
+        });
+        if (!detailRes.ok) continue;
 
-      const parsed = PromotionSchema.safeParse(promo);
-      if (parsed.success) promos.push(parsed.data);
-    });
+        const detailJson = (await detailRes.json()) as any;
+        const data = detailJson?.data;
+        if (!data) continue;
 
-    return { ok: true, data: promos, meta: { url, mode: "html_cards", count: promos.length } };
+        const header = normalizeText(String(data.cabecera ?? ""));
+        const pct = extractPercent(header) ?? extractPercent(String(data.basesCondiciones ?? "")) ?? extractPercent(String(data.vigencia ?? ""));
+        if (!pct) continue; // keep schema compatible
+
+        const store = normalizeText(header.replace(/\s*\d{1,2}\s?%\s*/g, "").trim()) || "BBVA (beneficios)";
+        const notes = normalizeText(String(data.basesCondiciones ?? "")) || null;
+        const imageUrl = typeof data.imagen === "string" && data.imagen.startsWith("http") ? data.imagen : null;
+
+        const beneficios = Array.isArray(data.beneficios) ? data.beneficios : [];
+        const tope = beneficios[0]?.tope;
+        const capArs = typeof tope === "number" && Number.isFinite(tope) && tope > 0 ? Math.trunc(tope) : null;
+
+        const daysText = normalizeText(String(data.diasPromo ?? "")) || (notes ?? "");
+
+        const promo: Promotion = {
+          id: `bbva-api-${id}`,
+          title: header || `${pct}% BBVA`,
+          bank: "BBVA",
+          issuerBanks: null,
+          imageUrl,
+          category: mapBbvaCategory([header, notes ?? ""].join(" ")),
+          store,
+          cardNetworks: guessCardNetworks([String(data.grupoTarjeta ?? ""), notes ?? ""].join(" ")),
+          days: guessDays(daysText),
+          paymentMethods: guessPaymentMethods([String(data.grupoTarjeta ?? ""), notes ?? ""].join(" ")),
+          discountPercent: pct,
+          capArs,
+          eligibility: null,
+          notes,
+          validFrom: null,
+          validTo: null,
+          // Human-facing BBVA page:
+          source: { type: "scraper_placeholder", url: `${BBVA_BENEFICIO_PAGE}?id=${encodeURIComponent(id)}` }
+        };
+
+        const parsed = PromotionSchema.safeParse(promo);
+        if (parsed.success) promos.push(parsed.data);
+      }
+
+      // API seems to return a fixed page size (usually 20). Stop only when empty or no new ids.
+    }
+
+    return {
+      ok: true,
+      data: promos,
+      meta: { mode: "bbva_api_v3", listEndpoint: BBVA_LIST_ENDPOINT, pagerParam: true, maxPages, count: promos.length }
+    };
   } catch (e) {
-    return { ok: false, error: e instanceof Error ? e.message : "Unknown error", meta: { url } };
+    return { ok: false, error: e instanceof Error ? e.message : "Unknown error", meta: { listEndpoint: BBVA_LIST_ENDPOINT } };
   }
 }

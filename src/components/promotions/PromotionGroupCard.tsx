@@ -1,0 +1,193 @@
+import type { Promotion } from "@/lib/schemas/promotion";
+import type { PromotionGroup } from "@/lib/promotions/group";
+import { Badge } from "@/components/ui/Badge";
+import { CreditCard, ExternalLink, Nfc, QrCode } from "lucide-react";
+
+function dayLabel(d: Promotion["days"][number]) {
+  switch (d) {
+    case "monday":
+      return "Lu";
+    case "tuesday":
+      return "Ma";
+    case "wednesday":
+      return "Mi";
+    case "thursday":
+      return "Ju";
+    case "friday":
+      return "Vi";
+    case "saturday":
+      return "Sa";
+    case "sunday":
+      return "Do";
+  }
+}
+
+function isEveryDay(days: Promotion["days"]) {
+  return days.length === 7;
+}
+
+function displayBankOrWallet(p: Promotion) {
+  // Requirement: show bank/wallet but NOT "MODO" (MODO is just a channel).
+  if (p.bank === "MODO") {
+    if (p.issuerBanks?.length) return p.issuerBanks.join(" · ");
+    return "Bancos adheridos";
+  }
+  return p.bank;
+}
+
+function paymentLabelForCard(p: Promotion, method: Promotion["paymentMethods"][number]) {
+  if (method === "QR" && p.bank === "MODO") return "MODO (QR)";
+  return paymentLabel(method);
+}
+
+function paymentIcon(method: Promotion["paymentMethods"][number]) {
+  switch (method) {
+    case "NFC":
+      return Nfc;
+    case "QR":
+      return QrCode;
+    case "Physical":
+      return CreditCard;
+  }
+}
+
+function paymentLabel(method: Promotion["paymentMethods"][number]) {
+  switch (method) {
+    case "NFC":
+      return "NFC";
+    case "QR":
+      return "QR";
+    case "Physical":
+      return "Tarjeta";
+  }
+}
+
+function eligibilityLabel(p: Promotion) {
+  const seg = p.eligibility?.segment ?? null;
+  if (seg) return seg;
+  if (p.eligibility?.eminent) return "Eminent";
+  if (p.eligibility?.haberes) return "Haberes";
+  return "General";
+}
+
+export function PromotionGroupCard({ group }: { group: PromotionGroup }) {
+  const top = group.variants[0];
+  const titleWithoutPercent = top.title.replace(/^\s*\d{1,2}\s?%\s*·\s*/i, "");
+  const promoUrl =
+    top.source?.url ??
+    (top.bank === "MODO" ? "https://www.modo.com.ar/promos" : null);
+
+  return (
+    <details className="group rounded-2xl border border-neutral-200 bg-white shadow-sm">
+      <summary className="cursor-pointer list-none p-4 [&::-webkit-details-marker]:hidden">
+        <div className="flex items-start gap-3">
+          <div className="shrink-0">
+            {top.imageUrl ? (
+              <img
+                src={top.imageUrl}
+                alt={group.store}
+                className="h-16 w-16 rounded-2xl border border-neutral-200 bg-neutral-50 object-cover"
+                loading="lazy"
+                referrerPolicy="no-referrer"
+              />
+            ) : (
+              <div className="h-16 w-16 rounded-2xl border border-neutral-200 bg-neutral-50" />
+            )}
+          </div>
+
+          <div className="min-w-0 flex-1">
+            <div className="flex items-start justify-between gap-3">
+              <div className="min-w-0">
+                <div className="truncate text-xs font-semibold text-neutral-700">
+                  {displayBankOrWallet(top)} · {group.store}
+                </div>
+                <h3 className="mt-1 line-clamp-2 text-sm font-bold leading-snug text-neutral-950">{titleWithoutPercent}</h3>
+              </div>
+
+              <div className="shrink-0 rounded-2xl bg-neutral-900 px-3 py-2 text-base font-extrabold text-white">
+                {top.discountPercent}%
+              </div>
+            </div>
+
+            <div className="mt-2 flex flex-wrap items-center gap-1.5">
+              <Badge className="bg-neutral-50 text-neutral-900">
+                {isEveryDay(top.days) ? "Todos los días" : top.days.map(dayLabel).join(" · ")}
+              </Badge>
+
+              {top.capArs ? (
+                <Badge className="border-neutral-200 bg-neutral-50 text-neutral-800">
+                  Tope: ${top.capArs.toLocaleString("es-AR")}
+                </Badge>
+              ) : null}
+
+              {group.paymentMethods.map((m) => {
+                const Icon = paymentIcon(m);
+                return (
+                  <span
+                    key={m}
+                    className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-2 py-0.5 text-xs font-semibold text-neutral-900"
+                    title={paymentLabelForCard(top, m)}
+                  >
+                    <Icon className="h-3.5 w-3.5" />
+                    {paymentLabelForCard(top, m)}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      </summary>
+
+      <div className="border-t border-neutral-200 px-4 pb-4 pt-3">
+        <div className="flex flex-wrap gap-1.5">
+          <Badge>{group.category}</Badge>
+          {group.cardNetworks.map((n) => (
+            <Badge key={n} className="text-neutral-700">
+              {n}
+            </Badge>
+          ))}
+        </div>
+
+        {group.variants.length > 1 ? (
+          <div className="mt-3 rounded-2xl border border-neutral-200 bg-neutral-50 p-3">
+            <div className="text-xs font-extrabold uppercase tracking-wide text-neutral-700">Opciones según tu cuenta</div>
+            <div className="mt-2 space-y-2">
+              {group.variants.map((v) => (
+                <div
+                  key={v.id}
+                  className="flex items-center justify-between gap-3 rounded-xl border border-neutral-200 bg-white px-3 py-2"
+                >
+                  <div className="min-w-0">
+                    <div className="text-sm font-extrabold text-neutral-950">{v.discountPercent}%</div>
+                    <div className="text-xs font-semibold text-neutral-600">{eligibilityLabel(v)}</div>
+                  </div>
+                  {v.capArs ? (
+                    <div className="text-xs font-extrabold text-neutral-800">Tope ${v.capArs.toLocaleString("es-AR")}</div>
+                  ) : null}
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
+
+        {top.notes ? <p className="mt-3 text-sm leading-relaxed text-neutral-700">{top.notes}</p> : null}
+
+        <div className="mt-3 flex items-center justify-between gap-2">
+          <div className="text-xs font-medium text-neutral-600">Más detalles</div>
+          {promoUrl ? (
+            <a
+              href={promoUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="inline-flex items-center gap-1 rounded-full border border-neutral-200 bg-white px-3 py-1.5 text-xs font-semibold text-neutral-900 hover:bg-neutral-50"
+            >
+              Ver promo
+              <ExternalLink className="h-3.5 w-3.5" />
+            </a>
+          ) : null}
+        </div>
+      </div>
+    </details>
+  );
+}
+

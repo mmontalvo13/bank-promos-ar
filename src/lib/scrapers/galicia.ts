@@ -188,7 +188,6 @@ export async function scrapeGaliciaPromotions(opts?: { url?: string }): Promise<
         url: htmlUrl,
         mode: "next_data_present",
         apiUrl,
-        apiStatus: apiRes.status,
         nextDataKeys: typeof raw === "object" && raw ? Object.keys(raw as any) : []
       };
       const fallback = extractFromDom(html);
@@ -197,7 +196,7 @@ export async function scrapeGaliciaPromotions(opts?: { url?: string }): Promise<
 
     // 2) Fallback: parse DOM and heuristically extract items.
     const data = extractFromDom(html);
-    return { ok: true, data, meta: { url: htmlUrl, mode: "dom_fallback", apiUrl, apiStatus: apiRes.status } };
+    return { ok: true, data, meta: { url: htmlUrl, mode: "dom_fallback", apiUrl } };
   } catch (e) {
     return {
       ok: false,
@@ -328,6 +327,8 @@ function extractFromDom(html: string): Promotion[] {
       id: `galicia-scrape-${hashId(c.detail)}`,
       title: c.title,
       bank: "Galicia",
+      issuerBanks: null,
+      imageUrl: GALICIA_LOGO_URL,
       category: "Other",
       store: "Beneficios Galicia",
       cardNetworks: ["Visa", "Mastercard", "Amex"],

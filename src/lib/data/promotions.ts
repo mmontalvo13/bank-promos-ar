@@ -45,7 +45,8 @@ export async function getPromotions(_query?: PromotionsQuery): Promise<Promotion
     // - Keep mock promos for other banks
     const [galiciaScrape, bbvaScrape, modoScrape] = await Promise.allSettled([
       cached("scrape:galicia:v2", 30 * 60 * 1000, async () => withTimeout(scrapeGaliciaPromotions(), 12_000)),
-      cached("scrape:bbva:v2", 30 * 60 * 1000, async () => withTimeout(scrapeBbvaPromotions({ maxPages: 8 }), 12_000)),
+      // Call without params to stay compatible with scraper versions.
+      cached("scrape:bbva:v2", 30 * 60 * 1000, async () => withTimeout(scrapeBbvaPromotions(), 12_000)),
       cached("scrape:modo:v2", 30 * 60 * 1000, async () => withTimeout(scrapeModoPromotions({ maxPages: 10, limit: 100 }), 12_000))
     ]);
 
